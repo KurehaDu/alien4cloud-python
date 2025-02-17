@@ -1,0 +1,52 @@
+# config/app.yaml
+# 应用基础配置
+
+app:
+  name: alien4cloud-python
+  version: 0.1.0
+  description: TOSCA工作流编排引擎
+
+server:
+  host: 0.0.0.0
+  port: 8088
+  debug: false
+  cors:
+    enabled: true
+    allow_origins: ["*"]
+    allow_methods: ["*"]
+    allow_headers: ["*"]
+
+database:
+  type: sqlite
+  path: data/alien4cloud.db
+
+storage:
+  type: local
+  path: data/storage
+
+cloud:
+  default_provider: mock
+  providers:
+    mock:
+      enabled: true
+    k8s:
+      enabled: false
+      config_path: config/k8s/microk8s.yaml
+
+workflow:
+  max_concurrent_executions: 10
+  execution_timeout: 3600  # 秒
+  cleanup_interval: 86400  # 秒
+  history_retention_days: 30
+
+tosca:
+  template_path: data/templates
+  custom_types_path: data/types
+  validation:
+    strict_mode: false
+    allow_unknown_types: true
+
+logging:
+  config_path: config/logging.yaml
+  level: INFO
+  file_path: logs/alien4cloud.log 
