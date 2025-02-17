@@ -364,10 +364,14 @@ create_service_user() {
 create_directories() {
     log_info "创建目录结构..."
     
-    mkdir -p ${INSTALL_DIR}/{etc,log,tmp}
+    # 创建数据和日志目录
     mkdir -p ${DATA_DIR}/{templates,instances,storage}
     mkdir -p ${LOG_DIR}/{app,nginx,supervisor}
     
+    # 创建临时目录
+    mkdir -p ${INSTALL_DIR}/tmp
+    
+    # 设置权限
     chown -R ${USER}:${GROUP} ${INSTALL_DIR}
     chown -R ${USER}:${GROUP} ${DATA_DIR}
     chown -R ${USER}:${GROUP} ${LOG_DIR}
@@ -761,8 +765,8 @@ main() {
     fi
     
     create_service_user
-    create_directories
     clone_project
+    create_directories
     install_python
     build_frontend
     install_nginx
