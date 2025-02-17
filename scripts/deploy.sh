@@ -437,16 +437,10 @@ EOF
 configure_supervisor() {
     log_info "配置Supervisor..."
     
-    # 确定工作进程数
-    local workers=$(nproc)
-    if [[ $workers -gt 4 ]]; then
-        workers=4
-    fi
-    
     # 创建Supervisor配置
     cat > /etc/supervisor/conf.d/alien4cloud.conf << EOF
 [program:alien4cloud]
-command=${INSTALL_DIR}/venv/bin/uvicorn alien4cloud.web.main:app --host 0.0.0.0 --port ${PORT} --workers ${workers}
+command=${INSTALL_DIR}/venv/bin/python -m uvicorn alien4cloud.web.main:app --host 0.0.0.0 --port ${PORT}
 directory=${INSTALL_DIR}
 user=${USER}
 group=${GROUP}
@@ -458,9 +452,9 @@ stopwaitsecs=60
 stopsignal=TERM
 stderr_logfile=${LOG_DIR}/supervisor/alien4cloud.err.log
 stdout_logfile=${LOG_DIR}/supervisor/alien4cloud.out.log
-environment=PATH="${INSTALL_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",PYTHONPATH="${INSTALL_DIR}",PYTHONUNBUFFERED="1"
+environment=PATH="${INSTALL_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",PYTHONPATH="${INSTALL_DIR}",CONFIG_FILE="${INSTALL_DIR}/etc/config.yaml"
 
-[program:alien4cloud-ui]
+[program:nginx]
 command=nginx -g "daemon off;"
 user=root
 autostart=true
@@ -473,7 +467,7 @@ stderr_logfile=${LOG_DIR}/supervisor/nginx.err.log
 stdout_logfile=${LOG_DIR}/supervisor/nginx.out.log
 
 [group:alien4cloud]
-programs=alien4cloud,alien4cloud-ui
+programs=alien4cloud,nginx
 priority=999
 EOF
     
@@ -515,8 +509,9 @@ health_check() {
         return 1
     fi
     
-    if ! netstat -tuln | grep -q ":${UI_PORT} "; then
-        log_error "UI端口 ${UI_PORT} 未正常监听"
+    # 检查UI文件
+    if [ ! -f "/var/www/alien4cloud/ui/index.html" ]; then
+        log_error "UI文件不存在"
         return 1
     fi
     
