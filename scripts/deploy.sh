@@ -44,6 +44,8 @@ MAX_RETRIES=3
 RETRY_INTERVAL=5
 LOG_FILE=""
 TEMP_DIR=""
+PUBLIC_IP=""
+ENABLE_K8S=false
 
 # 帮助信息
 show_help() {
@@ -62,6 +64,8 @@ show_help() {
   --skip-deps               跳过依赖安装
   --max-retries N          最大重试次数 (默认: 3)
   --retry-interval N       重试间隔(秒) (默认: 5)
+  --public-ip IP            指定公网IP
+  --enable-k8s              启用MicroK8s
 
 示例:
   $0 --install-dir /custom/path
@@ -296,6 +300,10 @@ install_python() {
     source "${INSTALL_DIR}/venv/bin/activate"
     retry_command "pip install --upgrade pip wheel"
     retry_command "pip install -r requirements.txt" || handle_error "无法安装Python依赖"
+    
+    if [[ "$ENABLE_K8S" == "true" ]]; then
+        install_microk8s
+    fi
 }
 
 # 安装Nginx
@@ -310,8 +318,12 @@ server {
     
     # UI
     location / {
-        root /var/www/alien4cloud/ui;
-        try_files \$uri \$uri/ /index.html;
+        proxy_pass http://localhost:${UI_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
     
     # API
@@ -319,16 +331,15 @@ server {
         proxy_pass http://localhost:${PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
 EOF
     
     # 删除默认配置
     rm -f /etc/nginx/sites-enabled/default
-    
-    # 创建静态文件目录
-    mkdir -p /var/www/alien4cloud/ui
-    chown -R ${USER}:${GROUP} /var/www/alien4cloud
     
     # 重启Nginx
     systemctl restart nginx || handle_error "无法重启Nginx"
@@ -370,6 +381,7 @@ configure_application() {
     
     mkdir -p ${INSTALL_DIR}/etc
     
+    # 生成配置文件
     cat > ${INSTALL_DIR}/etc/config.yaml << EOF
 app:
   name: alien4cloud
@@ -381,6 +393,7 @@ server:
   port: ${PORT}
   ui_port: ${UI_PORT}
   workers: 4
+  allowed_hosts: ["localhost", "127.0.0.1"$([ -n "$PUBLIC_IP" ] && echo ", \"$PUBLIC_IP\"")]
   
 database:
   url: sqlite:///${DATA_DIR}/alien4cloud.db
@@ -395,10 +408,13 @@ logging:
   backup_count: 10
   
 cloud:
-  default_provider: mock
+  default_provider: "mock"
   providers:
     mock:
       enabled: true
+    k8s:
+      enabled: ${ENABLE_K8S}
+      kubeconfig: "${DATA_DIR}/k8s/kubeconfig"
 
 tosca:
   templates_dir: ${DATA_DIR}/templates
@@ -487,7 +503,12 @@ health_check() {
     
     # 检查端口
     if ! netstat -tuln | grep -q ":${PORT} "; then
-        log_error "端口 ${PORT} 未正常监听"
+        log_error "API端口 ${PORT} 未正常监听"
+        return 1
+    fi
+    
+    if ! netstat -tuln | grep -q ":${UI_PORT} "; then
+        log_error "UI端口 ${UI_PORT} 未正常监听"
         return 1
     fi
     
@@ -495,6 +516,19 @@ health_check() {
     if [ ! -f "${DATA_DIR}/alien4cloud.db" ]; then
         log_error "数据库文件不存在"
         return 1
+    fi
+    
+    # 检查MicroK8s（如果启用）
+    if [[ "$ENABLE_K8S" == "true" ]]; then
+        if ! microk8s status --wait-ready &> /dev/null; then
+            log_error "MicroK8s未正常运行"
+            return 1
+        fi
+        
+        if [ ! -f "${DATA_DIR}/k8s/kubeconfig" ]; then
+            log_error "K8s配置文件不存在"
+            return 1
+        fi
     fi
     
     log_info "健康检查通过"
@@ -582,6 +616,53 @@ rollback() {
     exit 1
 }
 
+# 添加MicroK8s安装函数
+install_microk8s() {
+    log_info "安装MicroK8s..."
+    
+    # 检查系统资源
+    local mem_total=$(free -m | awk '/^Mem:/{print $2}')
+    local cpu_cores=$(nproc)
+    local disk_free=$(df -m / | awk 'NR==2 {print $4}')
+    
+    if [[ $mem_total -lt 8192 ]]; then
+        handle_error "MicroK8s需要至少8GB内存，当前: ${mem_total}MB"
+    fi
+    
+    if [[ $cpu_cores -lt 4 ]]; then
+        handle_error "MicroK8s需要至少4核CPU，当前: ${cpu_cores}核"
+    fi
+    
+    if [[ $disk_free -lt 30720 ]]; then
+        handle_error "MicroK8s需要至少30GB磁盘空间，当前可用: ${disk_free}MB"
+    fi
+    
+    # 安装MicroK8s
+    retry_command "snap install microk8s --classic" || handle_error "无法安装MicroK8s"
+    
+    # 等待MicroK8s就绪
+    local retry_count=0
+    while ! microk8s status --wait-ready &> /dev/null && [ $retry_count -lt $MAX_RETRIES ]; do
+        retry_count=$((retry_count + 1))
+        log_warn "等待MicroK8s就绪 ($retry_count/$MAX_RETRIES)"
+        sleep $RETRY_INTERVAL
+    done
+    
+    # 配置必要的插件
+    microk8s enable dns storage ingress
+    
+    # 配置用户权限
+    usermod -a -G microk8s ${USER}
+    
+    # 生成kubeconfig
+    mkdir -p ${DATA_DIR}/k8s
+    microk8s config > ${DATA_DIR}/k8s/kubeconfig
+    chown ${USER}:${GROUP} ${DATA_DIR}/k8s/kubeconfig
+    chmod 600 ${DATA_DIR}/k8s/kubeconfig
+    
+    log_info "MicroK8s安装完成"
+}
+
 # 主函数
 main() {
     # 解析命令行参数
@@ -629,6 +710,14 @@ main() {
             --retry-interval)
                 RETRY_INTERVAL="$2"
                 shift 2
+                ;;
+            --public-ip)
+                PUBLIC_IP="$2"
+                shift 2
+                ;;
+            --enable-k8s)
+                ENABLE_K8S=true
+                shift
                 ;;
             *)
                 handle_error "未知选项: $1"
@@ -685,9 +774,20 @@ main() {
     fi
     
     log_info "安装完成！"
-    log_info "您可以通过以下地址访问服务："
-    log_info "Web界面: http://localhost:${UI_PORT}"
-    log_info "API接口: http://localhost:${PORT}"
+    if [[ -n "$PUBLIC_IP" ]]; then
+        log_info "您可以通过以下地址访问服务："
+        log_info "Web界面: http://${PUBLIC_IP}:${UI_PORT}"
+        log_info "API接口: http://${PUBLIC_IP}:${PORT}"
+    else
+        log_info "您可以通过以下地址访问服务："
+        log_info "Web界面: http://localhost:${UI_PORT}"
+        log_info "API接口: http://localhost:${PORT}"
+    fi
+    
+    if [[ "$ENABLE_K8S" == "true" ]]; then
+        log_info "MicroK8s已启用并配置完成"
+        log_info "K8s配置文件位置: ${DATA_DIR}/k8s/kubeconfig"
+    fi
     
     log_info "安装日志已保存到: ${LOG_FILE}"
     log_info "配置文件位置: ${INSTALL_DIR}/etc/config.yaml"
