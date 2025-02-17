@@ -316,14 +316,15 @@ server {
     listen 80;
     server_name _;
     
+    root /var/www/alien4cloud/ui;
+    index index.html;
+    
     # UI
     location / {
-        proxy_pass http://localhost:${UI_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        try_files \$uri \$uri/ /index.html;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Pragma "no-cache";
+        add_header Expires "0";
     }
     
     # API
@@ -340,6 +341,9 @@ EOF
     
     # 删除默认配置
     rm -f /etc/nginx/sites-enabled/default
+    
+    # 设置Nginx用户权限
+    usermod -a -G ${GROUP} www-data
     
     # 重启Nginx
     systemctl restart nginx || handle_error "无法重启Nginx"
@@ -577,6 +581,10 @@ build_frontend() {
         retry_command "npm install -g yarn" || handle_error "无法安装yarn"
     fi
     
+    # 创建UI目录
+    mkdir -p /var/www/alien4cloud/ui || handle_error "无法创建UI目录"
+    chown -R ${USER}:${GROUP} /var/www/alien4cloud
+    
     # 构建UI
     cd "${INSTALL_DIR}/alien4cloud/web/ui"
     retry_command "yarn install" || handle_error "无法安装UI依赖"
@@ -584,6 +592,7 @@ build_frontend() {
     
     # 复制构建文件
     cp -r dist/* /var/www/alien4cloud/ui/ || handle_error "无法复制UI文件"
+    chown -R ${USER}:${GROUP} /var/www/alien4cloud/ui
 }
 
 # 回滚函数
