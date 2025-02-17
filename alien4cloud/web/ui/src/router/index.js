@@ -1,16 +1,10 @@
-import WorkflowDetail from '../components/workflow/WorkflowDetail.vue';
-import WorkflowEditor from '../components/workflow/WorkflowEditor.vue';
-
+// 路由配置
 const routes = [
-  // ...其他路由
   {
-    path: '/workflow/detail/:id',
-    name: 'WorkflowDetail',
-    component: WorkflowDetail
-  },
-  {
-    path: '/workflow/editor',
-    name: 'WorkflowEditor',
-    component: WorkflowEditor
+    path: '/',
+    name: 'Home',
+    component: () => import('../components/Home.vue')
   }
-]; 
+]
+
+export default routes
