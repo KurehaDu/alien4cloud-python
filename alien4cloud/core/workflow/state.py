@@ -25,10 +25,10 @@ class StepState(Enum):
 
 @dataclass
 class StepStatus:
-    """步骤状态信息"""
+    """步骤状态"""
     id: str
     name: str
-    state: StepState
+    state: StepState = StepState.PENDING
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
@@ -67,10 +67,10 @@ class StepStatus:
 
 @dataclass
 class WorkflowStatus:
-    """工作流状态信息"""
+    """工作流状态"""
     id: str
     name: str
-    state: WorkflowState
+    state: WorkflowState = WorkflowState.CREATED
     steps: Dict[str, StepStatus] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None

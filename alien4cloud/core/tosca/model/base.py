@@ -15,7 +15,7 @@ class BaseModel:
     """
     id: str
     name: str
-    version: str = "0.1"
+    version: str = '0.1.0'
     description: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
@@ -42,7 +42,7 @@ class BaseModel:
         return cls(
             id=data['id'],
             name=data['name'],
-            version=data['version'],
+            version=data.get('version', '0.1.0'),
             description=data.get('description'),
             metadata=data.get('metadata', {}),
             created_at=created_at,

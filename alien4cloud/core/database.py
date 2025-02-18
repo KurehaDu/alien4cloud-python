@@ -8,18 +8,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 基础异常类
+class DatabaseError(Exception):
+    """数据库错误基类"""
+    pass
+
+# 创建基础模型类
+Base = declarative_base()
+
 # 默认数据库配置
 DEFAULT_DB_CONFIG = {
     'type': 'sqlite',
     'path': os.path.join(os.path.expanduser('~'), '.alien4cloud', 'alien4cloud.db'),
     'echo': False
 }
-
-class DatabaseError(Exception):
-    """数据库错误"""
-    pass
-
-Base = declarative_base()
 
 class Database:
     """数据库管理类"""
@@ -38,37 +40,32 @@ class Database:
 
     def init_db(self, config: dict = None) -> None:
         """初始化数据库"""
-        try:
-            if config is None:
-                config = DEFAULT_DB_CONFIG
+        if config is None:
+            config = DEFAULT_DB_CONFIG
 
-            # 确保数据库目录存在
-            db_dir = os.path.dirname(config['path'])
-            if not os.path.exists(db_dir):
-                os.makedirs(db_dir)
+        # 确保数据库目录存在
+        db_dir = os.path.dirname(config['path'])
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
 
-            # 创建数据库引擎
-            if config['type'] == 'sqlite':
-                self._engine = create_engine(
-                    f"sqlite:///{config['path']}", 
-                    echo=config['echo']
-                )
-            else:
-                raise DatabaseError(f"不支持的数据库类型: {config['type']}")
-
-            # 创建会话工厂
-            self._session_factory = sessionmaker(
-                autocommit=False,
-                autoflush=False,
-                bind=self._engine
+        # 创建数据库引擎
+        if config['type'] == 'sqlite':
+            self._engine = create_engine(
+                f"sqlite:///{config['path']}", 
+                echo=config['echo']
             )
+        else:
+            raise DatabaseError(f"不支持的数据库类型: {config['type']}")
 
-            # 创建表
-            Base.metadata.create_all(bind=self._engine)
+        # 创建会话工厂
+        self._session_factory = sessionmaker(
+            autocommit=False,
+            autoflush=False,
+            bind=self._engine
+        )
 
-        except Exception as e:
-            logger.error(f"初始化数据库失败: {str(e)}")
-            raise DatabaseError(f"初始化数据库失败: {str(e)}")
+        # 创建表
+        Base.metadata.create_all(bind=self._engine)
 
     def get_session(self) -> Generator[Session, None, None]:
         """获取数据库会话"""

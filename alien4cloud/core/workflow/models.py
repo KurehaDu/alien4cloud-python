@@ -3,12 +3,11 @@ from typing import Dict, Any, Optional
 import json
 
 from sqlalchemy import Column, String, DateTime, Text, Integer, ForeignKey, Enum as SQLEnum, JSON
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 
+from ..database import Base
 from .state import WorkflowState, StepState
-
-Base = declarative_base()
 
 class WorkflowModel(Base):
     """工作流数据库模型"""
@@ -77,6 +76,7 @@ class StepModel(Base):
         self._outputs = json.dumps(value)
 
 class WorkflowTemplate(Base):
+    """工作流模板模型"""
     __tablename__ = 'workflow_templates'
     
     id = Column(Integer, primary_key=True)
@@ -88,12 +88,13 @@ class WorkflowTemplate(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class WorkflowInstance(Base):
+    """工作流实例模型"""
     __tablename__ = 'workflow_instances'
     
     id = Column(Integer, primary_key=True)
     template_id = Column(Integer, ForeignKey('workflow_templates.id'), nullable=False)
     name = Column(String(100), nullable=False)
-    status = Column(String(50), default='created')  # created, running, completed, failed
+    status = Column(SQLEnum(WorkflowState), default=WorkflowState.CREATED)
     nodes_status = Column(JSON)  # 节点状态
     cloud_provider = Column(String(50))  # mock, k8s
     created_at = Column(DateTime, default=datetime.utcnow)

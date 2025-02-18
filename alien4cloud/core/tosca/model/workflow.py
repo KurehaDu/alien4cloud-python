@@ -45,6 +45,7 @@ class WorkflowStep:
 @dataclass
 class WorkflowDefinition(BaseModel):
     """工作流定义模型"""
+    workflow: Dict[str, WorkflowStep]
     steps: Dict[str, WorkflowStep] = field(default_factory=dict)
     inputs: Dict[str, Any] = field(default_factory=dict)
     preconditions: List[str] = field(default_factory=list)
@@ -53,6 +54,7 @@ class WorkflowDefinition(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         data = super().to_dict()
         data.update({
+            'workflow': {k: v.to_dict() for k, v in self.workflow.items()},
             'steps': {k: v.to_dict() for k, v in self.steps.items()},
             'inputs': self.inputs,
             'preconditions': self.preconditions,
@@ -64,6 +66,12 @@ class WorkflowDefinition(BaseModel):
     def from_dict(cls, data: Dict[str, Any]) -> 'WorkflowDefinition':
         instance = super().from_dict(data)
         
+        # 解析workflow
+        workflow = {}
+        for name, step_data in data.get('workflow', {}).items():
+            workflow[name] = WorkflowStep.from_dict(step_data)
+        instance.workflow = workflow
+
         # 解析steps
         steps = {}
         for name, step_data in data.get('steps', {}).items():
@@ -78,14 +86,8 @@ class WorkflowDefinition(BaseModel):
 
 @dataclass
 class WorkflowTemplate(BaseModel):
-    """工作流模板模型
-    
-    继承BaseModel的基础属性，并添加：
-    - workflow: 工作流定义
-    - node_types: 节点类型列表（可选）
-    - tags: 标签列表（可选）
-    """
-    workflow: WorkflowDefinition = None
+    """工作流模板模型"""
+    workflow: WorkflowDefinition
     description: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
