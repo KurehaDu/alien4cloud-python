@@ -8,11 +8,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
-from .models import (
-    Base, WorkflowModel, StepModel,
-    WorkflowState, StepState,
-    WorkflowStatus, StepStatus
-)
+from .base import WorkflowState, StepState, WorkflowStatus, StepStatus
+from .models import Base, WorkflowModel, StepModel
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +34,7 @@ class Database:
         """获取数据库会话"""
         return self.SessionLocal()
 
-    def save_workflow(self, workflow: WorkflowStatus) -> None:
+    def save_workflow(self, workflow: WorkflowState) -> None:
         """保存工作流状态"""
         try:
             with self.get_session() as session:
@@ -48,7 +45,7 @@ class Database:
                     db_workflow = WorkflowModel(
                         id=workflow.id,
                         name=workflow.name,
-                        state=workflow.state,
+                        status=workflow.status.value,
                         created_at=workflow.created_at,
                         started_at=workflow.started_at,
                         completed_at=workflow.completed_at,
@@ -60,7 +57,7 @@ class Database:
                     session.add(db_workflow)
                 else:
                     # 更新现有工作流
-                    db_workflow.state = workflow.state
+                    db_workflow.status = workflow.status.value
                     db_workflow.started_at = workflow.started_at
                     db_workflow.completed_at = workflow.completed_at
                     db_workflow.error_message = workflow.error_message
@@ -77,7 +74,7 @@ class Database:
                             id=step_id,
                             workflow_id=workflow.id,
                             name=step.name,
-                            state=step.state,
+                            status=step.status.value,
                             started_at=step.started_at,
                             completed_at=step.completed_at,
                             error_message=step.error_message,
@@ -88,7 +85,7 @@ class Database:
                         session.add(db_step)
                     else:
                         # 更新现有步骤
-                        db_step.state = step.state
+                        db_step.status = step.status.value
                         db_step.started_at = step.started_at
                         db_step.completed_at = step.completed_at
                         db_step.error_message = step.error_message
@@ -101,7 +98,7 @@ class Database:
             logger.error(f"保存工作流失败: {str(e)}")
             raise DatabaseError(f"保存工作流失败: {str(e)}")
 
-    def load_workflow(self, workflow_id: str) -> Optional[WorkflowStatus]:
+    def load_workflow(self, workflow_id: str) -> Optional[WorkflowState]:
         """加载工作流状态"""
         try:
             with self.get_session() as session:
@@ -109,11 +106,11 @@ class Database:
                 if db_workflow is None:
                     return None
 
-                # 转换为WorkflowStatus
-                workflow = WorkflowStatus(
+                # 转换为WorkflowState
+                workflow = WorkflowState(
                     id=db_workflow.id,
                     name=db_workflow.name,
-                    state=db_workflow.state,
+                    status=WorkflowStatus(db_workflow.status),
                     created_at=db_workflow.created_at,
                     started_at=db_workflow.started_at,
                     completed_at=db_workflow.completed_at,
@@ -125,10 +122,10 @@ class Database:
 
                 # 加载步骤
                 for db_step in db_workflow.steps:
-                    step = StepStatus(
+                    step = StepState(
                         id=db_step.id,
                         name=db_step.name,
-                        state=db_step.state,
+                        status=StepStatus(db_step.status),
                         started_at=db_step.started_at,
                         completed_at=db_step.completed_at,
                         error_message=db_step.error_message,
@@ -144,7 +141,7 @@ class Database:
             logger.error(f"加载工作流失败: {str(e)}")
             raise DatabaseError(f"加载工作流失败: {str(e)}")
 
-    def list_workflows(self, filters: Dict[str, Any] = None) -> List[WorkflowStatus]:
+    def list_workflows(self, filters: Dict[str, Any] = None) -> List[WorkflowState]:
         """列出工作流状态"""
         try:
             with self.get_session() as session:
@@ -158,10 +155,10 @@ class Database:
                 # 执行查询
                 workflows = []
                 for db_workflow in session.execute(query).scalars():
-                    workflow = WorkflowStatus(
+                    workflow = WorkflowState(
                         id=db_workflow.id,
                         name=db_workflow.name,
-                        state=db_workflow.state,
+                        status=WorkflowStatus(db_workflow.status),
                         created_at=db_workflow.created_at,
                         started_at=db_workflow.started_at,
                         completed_at=db_workflow.completed_at,
@@ -173,10 +170,10 @@ class Database:
                     
                     # 加载步骤
                     for db_step in db_workflow.steps:
-                        step = StepStatus(
+                        step = StepState(
                             id=db_step.id,
                             name=db_step.name,
-                            state=db_step.state,
+                            status=StepStatus(db_step.status),
                             started_at=db_step.started_at,
                             completed_at=db_step.completed_at,
                             error_message=db_step.error_message,
@@ -218,9 +215,9 @@ class Database:
                 cutoff_date = datetime.now() - timedelta(days=max_age_days)
                 
                 # 查找需要清理的工作流
-                completed_states = [WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.CANCELLED]
+                completed_states = [s.value for s in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]]
                 query = select(WorkflowModel).where(
-                    WorkflowModel.state.in_(completed_states),
+                    WorkflowModel.status.in_(completed_states),
                     WorkflowModel.completed_at <= cutoff_date
                 )
                 

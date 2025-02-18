@@ -1,49 +1,12 @@
 from datetime import datetime
-from typing import Dict, Any, Optional, List
 import json
-from dataclasses import dataclass, field
-from enum import Enum
+from typing import Dict, Any, Optional
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, ForeignKey, Enum as SQLEnum, JSON
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy import Column, String, DateTime, Text, Integer, ForeignKey, JSON
+from sqlalchemy.orm import relationship
 from sqlalchemy.ext.hybrid import hybrid_property
 
-Base = declarative_base()
-
-class WorkflowStatus(str, Enum):
-    """工作流状态"""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-class StepStatus(str, Enum):
-    """步骤状态"""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    SKIPPED = "skipped"
-
-@dataclass
-class StepState:
-    """步骤状态"""
-    id: str
-    status: StepStatus = StepStatus.PENDING
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error: Optional[str] = None
-
-@dataclass 
-class WorkflowState:
-    """工作流状态"""
-    id: str
-    status: WorkflowStatus = WorkflowStatus.PENDING
-    steps: Dict[str, StepState] = field(default_factory=dict)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error: Optional[str] = None
+from .base import Base, WorkflowStatus, StepStatus
 
 class WorkflowModel(Base):
     """工作流数据库模型"""
@@ -55,7 +18,7 @@ class WorkflowModel(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.now)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    error = Column(String, nullable=True)
+    error_message = Column(String, nullable=True)
     _inputs = Column('inputs', Text)
     _outputs = Column('outputs', Text)
     _metadata = Column('metadata', Text)
@@ -64,27 +27,27 @@ class WorkflowModel(Base):
 
     @hybrid_property
     def inputs(self) -> Dict[str, Any]:
-        return json.loads(self._inputs) if self._inputs else {}
+        return json.loads(self._inputs) if self._inputs is not None else {}
 
     @inputs.setter
     def inputs(self, value: Dict[str, Any]):
-        self._inputs = json.dumps(value)
+        self._inputs = json.dumps(value) if value is not None else None
 
     @hybrid_property
     def outputs(self) -> Dict[str, Any]:
-        return json.loads(self._outputs) if self._outputs else {}
+        return json.loads(self._outputs) if self._outputs is not None else {}
 
     @outputs.setter
     def outputs(self, value: Dict[str, Any]):
-        self._outputs = json.dumps(value)
+        self._outputs = json.dumps(value) if value is not None else None
 
     @hybrid_property
     def metadata(self) -> Dict[str, Any]:
-        return json.loads(self._metadata) if self._metadata else {}
+        return json.loads(self._metadata) if self._metadata is not None else {}
 
     @metadata.setter
     def metadata(self, value: Dict[str, Any]):
-        self._metadata = json.dumps(value)
+        self._metadata = json.dumps(value) if value is not None else None
 
 class StepModel(Base):
     """步骤数据库模型"""
@@ -96,7 +59,7 @@ class StepModel(Base):
     status = Column(String)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    error = Column(String, nullable=True)
+    error_message = Column(String, nullable=True)
     _outputs = Column('outputs', Text)
     retry_count = Column(Integer, default=0)
     max_retries = Column(Integer, default=3)
@@ -105,11 +68,11 @@ class StepModel(Base):
 
     @hybrid_property
     def outputs(self) -> Dict[str, Any]:
-        return json.loads(self._outputs) if self._outputs else {}
+        return json.loads(self._outputs) if self._outputs is not None else {}
 
     @outputs.setter
     def outputs(self, value: Dict[str, Any]):
-        self._outputs = json.dumps(value)
+        self._outputs = json.dumps(value) if value is not None else None
 
 class WorkflowTemplate(Base):
     """工作流模板模型"""
@@ -130,7 +93,7 @@ class WorkflowInstance(Base):
     id = Column(Integer, primary_key=True)
     template_id = Column(Integer, ForeignKey('workflow_templates.id'), nullable=False)
     name = Column(String(100), nullable=False)
-    status = Column(SQLEnum(WorkflowStatus), default=WorkflowStatus.CREATED)
+    status = Column(String, default=WorkflowStatus.CREATED.value)
     nodes_status = Column(JSON)  # 节点状态
     cloud_provider = Column(String(50))  # mock, k8s
     created_at = Column(DateTime, default=datetime.utcnow)

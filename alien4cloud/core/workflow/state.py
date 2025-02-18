@@ -1,121 +1,11 @@
-from enum import Enum
-from typing import Any, Dict, List, Optional
-from dataclasses import dataclass, field
-from datetime import datetime
+import logging
+from typing import Dict, List, Optional, Any
+from datetime import datetime, timedelta
 
+from .base import WorkflowState, StepState, WorkflowStatus, StepStatus
 from .database import Database, DatabaseError
 
-class WorkflowState(Enum):
-    """工作流状态枚举"""
-    CREATED = "created"         # 已创建
-    PENDING = "pending"         # 等待执行
-    RUNNING = "running"         # 执行中
-    PAUSED = "paused"          # 已暂停
-    COMPLETED = "completed"     # 已完成
-    FAILED = "failed"          # 执行失败
-    CANCELLED = "cancelled"     # 已取消
-
-class StepState(Enum):
-    """步骤状态枚举"""
-    PENDING = "pending"         # 等待执行
-    RUNNING = "running"         # 执行中
-    COMPLETED = "completed"     # 已完成
-    FAILED = "failed"          # 执行失败
-    SKIPPED = "skipped"        # 已跳过
-
-@dataclass
-class StepStatus:
-    """步骤状态"""
-    id: str
-    name: str
-    state: StepState = StepState.PENDING
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    outputs: Dict[str, Any] = field(default_factory=dict)
-    retry_count: int = 0
-    max_retries: int = 3
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            'id': self.id,
-            'name': self.name,
-            'state': self.state.value,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
-            'error_message': self.error_message,
-            'outputs': self.outputs,
-            'retry_count': self.retry_count,
-            'max_retries': self.max_retries
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'StepStatus':
-        """从字典创建实例"""
-        return cls(
-            id=data['id'],
-            name=data['name'],
-            state=StepState(data['state']),
-            started_at=datetime.fromisoformat(data['started_at']) if data.get('started_at') else None,
-            completed_at=datetime.fromisoformat(data['completed_at']) if data.get('completed_at') else None,
-            error_message=data.get('error_message'),
-            outputs=data.get('outputs', {}),
-            retry_count=data.get('retry_count', 0),
-            max_retries=data.get('max_retries', 3)
-        )
-
-@dataclass
-class WorkflowStatus:
-    """工作流状态"""
-    id: str
-    name: str
-    state: WorkflowState = WorkflowState.CREATED
-    steps: Dict[str, StepStatus] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    inputs: Dict[str, Any] = field(default_factory=dict)
-    outputs: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
-        return {
-            'id': self.id,
-            'name': self.name,
-            'state': self.state.value,
-            'steps': {k: v.to_dict() for k, v in self.steps.items()},
-            'created_at': self.created_at.isoformat(),
-            'started_at': self.started_at.isoformat() if self.started_at else None,
-            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
-            'error_message': self.error_message,
-            'inputs': self.inputs,
-            'outputs': self.outputs,
-            'metadata': self.metadata
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'WorkflowStatus':
-        """从字典创建实例"""
-        steps = {}
-        for step_id, step_data in data.get('steps', {}).items():
-            steps[step_id] = StepStatus.from_dict(step_data)
-
-        return cls(
-            id=data['id'],
-            name=data['name'],
-            state=WorkflowState(data['state']),
-            steps=steps,
-            created_at=datetime.fromisoformat(data['created_at']),
-            started_at=datetime.fromisoformat(data['started_at']) if data.get('started_at') else None,
-            completed_at=datetime.fromisoformat(data['completed_at']) if data.get('completed_at') else None,
-            error_message=data.get('error_message'),
-            inputs=data.get('inputs', {}),
-            outputs=data.get('outputs', {}),
-            metadata=data.get('metadata', {})
-        )
+logger = logging.getLogger(__name__)
 
 class StateManager:
     """工作流状态管理器"""
@@ -123,7 +13,7 @@ class StateManager:
     def __init__(self, database_url: str):
         """初始化状态管理器"""
         self.db = Database(database_url)
-        self._workflows: Dict[str, WorkflowStatus] = {}
+        self._workflows: Dict[str, WorkflowState] = {}
         self._load_from_db()
 
     def _load_from_db(self) -> None:
@@ -135,15 +25,15 @@ class StateManager:
         except DatabaseError as e:
             logger.error(f"从数据库加载工作流状态失败: {str(e)}")
 
-    def create_workflow(self, workflow_id: str, name: str, inputs: Dict[str, Any] = None) -> WorkflowStatus:
+    def create_workflow(self, workflow_id: str, name: str, inputs: Dict[str, Any] = None) -> WorkflowState:
         """创建工作流状态"""
         if workflow_id in self._workflows:
             raise ValueError(f"工作流 {workflow_id} 已存在")
 
-        status = WorkflowStatus(
+        status = WorkflowState(
             id=workflow_id,
             name=name,
-            state=WorkflowState.CREATED,
+            status=WorkflowStatus.CREATED,
             inputs=inputs or {}
         )
         self._workflows[workflow_id] = status
@@ -157,37 +47,37 @@ class StateManager:
         
         return status
 
-    def get_workflow_status(self, workflow_id: str) -> Optional[WorkflowStatus]:
+    def get_workflow_status(self, workflow_id: str) -> Optional[WorkflowState]:
         """获取工作流状态"""
         return self._workflows.get(workflow_id)
 
-    def update_workflow_state(self, workflow_id: str, state: WorkflowState, 
-                            error_message: Optional[str] = None) -> WorkflowStatus:
+    def update_workflow_state(self, workflow_id: str, status: WorkflowStatus, 
+                            error_message: Optional[str] = None) -> WorkflowState:
         """更新工作流状态"""
-        status = self._workflows.get(workflow_id)
-        if not status:
+        workflow = self._workflows.get(workflow_id)
+        if not workflow:
             raise ValueError(f"工作流 {workflow_id} 不存在")
 
-        status.state = state
-        if state == WorkflowState.RUNNING and not status.started_at:
-            status.started_at = datetime.now()
-        elif state in [WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.CANCELLED]:
-            status.completed_at = datetime.now()
+        workflow.status = status
+        if status == WorkflowStatus.RUNNING and not workflow.started_at:
+            workflow.started_at = datetime.now()
+        elif status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]:
+            workflow.completed_at = datetime.now()
         
         if error_message:
-            status.error_message = error_message
+            workflow.error_message = error_message
 
         try:
-            self.db.save_workflow(status)
+            self.db.save_workflow(workflow)
         except DatabaseError as e:
             logger.error(f"保存工作流状态失败: {str(e)}")
             raise
 
-        return status
+        return workflow
 
     def update_step_state(self, workflow_id: str, step_id: str, 
-                         state: StepState, error_message: Optional[str] = None,
-                         outputs: Dict[str, Any] = None) -> StepStatus:
+                         status: StepStatus, error_message: Optional[str] = None,
+                         outputs: Dict[str, Any] = None) -> StepState:
         """更新步骤状态"""
         workflow = self._workflows.get(workflow_id)
         if not workflow:
@@ -197,10 +87,10 @@ class StateManager:
         if not step:
             raise ValueError(f"步骤 {step_id} 不存在")
 
-        step.state = state
-        if state == StepState.RUNNING and not step.started_at:
+        step.status = status
+        if status == StepStatus.RUNNING and not step.started_at:
             step.started_at = datetime.now()
-        elif state in [StepState.COMPLETED, StepState.FAILED, StepState.SKIPPED]:
+        elif status in [StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.SKIPPED]:
             step.completed_at = datetime.now()
 
         if error_message:
@@ -216,7 +106,7 @@ class StateManager:
 
         return step
 
-    def add_step(self, workflow_id: str, step_id: str, name: str) -> StepStatus:
+    def add_step(self, workflow_id: str, step_id: str, name: str) -> StepState:
         """添加工作流步骤"""
         workflow = self._workflows.get(workflow_id)
         if not workflow:
@@ -225,10 +115,10 @@ class StateManager:
         if step_id in workflow.steps:
             raise ValueError(f"步骤 {step_id} 已存在")
 
-        step = StepStatus(
+        step = StepState(
             id=step_id,
             name=name,
-            state=StepState.PENDING
+            status=StepStatus.PENDING
         )
         workflow.steps[step_id] = step
 
@@ -241,7 +131,7 @@ class StateManager:
 
         return step
 
-    def list_workflows(self, filters: Dict[str, Any] = None) -> List[WorkflowStatus]:
+    def list_workflows(self, filters: Dict[str, Any] = None) -> List[WorkflowState]:
         """列出工作流状态"""
         if not filters:
             return list(self._workflows.values())
@@ -261,9 +151,13 @@ class StateManager:
         """清理已完成的工作流"""
         try:
             count = self.db.cleanup_workflows(max_age_days)
-            # 重新加载内存中的工作流
-            self._workflows.clear()
-            self._load_from_db()
+            # 从内存中移除已清理的工作流
+            cutoff_date = datetime.now() - timedelta(days=max_age_days)
+            for workflow_id in list(self._workflows.keys()):
+                workflow = self._workflows[workflow_id]
+                if (workflow.status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED] and
+                    workflow.completed_at and workflow.completed_at <= cutoff_date):
+                    del self._workflows[workflow_id]
             return count
         except DatabaseError as e:
             logger.error(f"清理工作流失败: {str(e)}")
