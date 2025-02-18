@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 from .base import BaseModel
+from datetime import datetime
 
 class WorkflowStepType(Enum):
     """工作流步骤类型"""
@@ -77,12 +78,26 @@ class WorkflowDefinition(BaseModel):
 
 @dataclass
 class WorkflowTemplate(BaseModel):
-    """工作流模板模型"""
+    """工作流模板模型
+    
+    继承BaseModel的基础属性，并添加：
+    - workflow: 工作流定义
+    - node_types: 节点类型列表（可选）
+    - tags: 标签列表（可选）
+    """
+    id: str
+    name: str
+    version: str
     workflow: WorkflowDefinition
+    description: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     node_types: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式"""
         data = super().to_dict()
         data.update({
             'workflow': self.workflow.to_dict(),
@@ -93,10 +108,9 @@ class WorkflowTemplate(BaseModel):
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'WorkflowTemplate':
+        """从字典创建实例"""
         instance = super().from_dict(data)
-        
         instance.workflow = WorkflowDefinition.from_dict(data['workflow'])
         instance.node_types = data.get('node_types', [])
         instance.tags = data.get('tags', [])
-        
         return instance 

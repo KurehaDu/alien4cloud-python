@@ -75,4 +75,4 @@ class ToscaType(BaseModel):
         instance = super().from_dict(data)
         instance.derived_from = data.get('derived_from')
         instance.properties = data.get('properties', {})
-        return instance 
+        return instance
