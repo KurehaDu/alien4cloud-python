@@ -44,12 +44,12 @@ class ToscaType(BaseModel):
     id: str
     name: str
     version: str
+    derived_from: Optional[str] = None
     description: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    properties: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
-    derived_from: Optional[str] = None
-    properties: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典格式"""
