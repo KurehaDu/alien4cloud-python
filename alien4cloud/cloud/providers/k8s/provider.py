@@ -4,17 +4,14 @@ import asyncio
 import base64
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from kubernetes import client, config, watch
-from kubernetes.client.rest import ApiException
+from kubernetes import client, config
 
-from ...base import CloudProvider, ResourceStatus, DeploymentStatus
-from ...errors import (
-    CloudError, ConfigError, ConnectionError, ResourceError,
-    DeploymentError, OperationError, NotFoundError
-)
+from ...base import CloudProvider
+from ...config import CloudConfig
+from ...errors import ConfigError
 
 class K8sCloudProvider(CloudProvider):
     """Kubernetes云平台提供者"""
@@ -44,7 +41,7 @@ class K8sCloudProvider(CloudProvider):
             self._core_api.list_namespace()
             self._connected = True
         except Exception as e:
-            raise ConnectionError(f"无法连接到Kubernetes集群: {str(e)}")
+            raise ConfigError(f"无法连接到Kubernetes集群: {str(e)}")
 
     async def disconnect(self) -> None:
         """断开与Kubernetes集群的连接"""
@@ -69,7 +66,7 @@ class K8sCloudProvider(CloudProvider):
     def _check_connection(self):
         """检查连接状态"""
         if not self._connected:
-            raise ConnectionError("未连接到Kubernetes集群")
+            raise ConfigError("未连接到Kubernetes集群")
 
     def _create_deployment_manifest(self, name: str, template: Dict[str, Any],
                                   inputs: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -103,7 +100,7 @@ class K8sCloudProvider(CloudProvider):
         # 验证模板
         errors = await self.validate_template(template)
         if errors:
-            raise DeploymentError(f"模板验证失败: {', '.join(errors)}")
+            raise ConfigError(f"模板验证失败: {', '.join(errors)}")
 
         try:
             # 创建部署清单
@@ -133,8 +130,8 @@ class K8sCloudProvider(CloudProvider):
 
             return response.metadata.name
 
-        except ApiException as e:
-            raise DeploymentError(f"创建部署失败: {str(e)}")
+        except Exception as e:
+            raise ConfigError(f"创建部署失败: {str(e)}")
 
     async def delete_deployment(self, deployment_id: str) -> None:
         """删除部署"""
@@ -153,13 +150,13 @@ class K8sCloudProvider(CloudProvider):
                     name=deployment_id,
                     namespace=self._namespace
                 )
-            except ApiException as e:
+            except Exception as e:
                 if e.status != 404:  # 忽略未找到错误
                     raise
                     
-        except ApiException as e:
+        except Exception as e:
             if e.status != 404:  # 忽略未找到错误
-                raise DeploymentError(f"删除部署失败: {str(e)}")
+                raise ConfigError(f"删除部署失败: {str(e)}")
 
     async def get_deployment_status(self, deployment_id: str) -> DeploymentStatus:
         """获取部署状态"""
@@ -226,10 +223,10 @@ class K8sCloudProvider(CloudProvider):
                 }
             )
             
-        except ApiException as e:
+        except Exception as e:
             if e.status == 404:
                 raise NotFoundError(f"未找到部署 {deployment_id}")
-            raise CloudError(f"获取部署状态失败: {str(e)}")
+            raise ConfigError(f"获取部署状态失败: {str(e)}")
 
     async def list_deployments(self, filters: Dict[str, Any] = None) -> List[DeploymentStatus]:
         """列出部署"""
@@ -266,8 +263,8 @@ class K8sCloudProvider(CloudProvider):
                 
             return result
             
-        except ApiException as e:
-            raise CloudError(f"列出部署失败: {str(e)}")
+        except Exception as e:
+            raise ConfigError(f"列出部署失败: {str(e)}")
 
     async def update_deployment(self, deployment_id: str,
                               template: Dict[str, Any],
@@ -278,7 +275,7 @@ class K8sCloudProvider(CloudProvider):
         # 验证模板
         errors = await self.validate_template(template)
         if errors:
-            raise DeploymentError(f"模板验证失败: {', '.join(errors)}")
+            raise ConfigError(f"模板验证失败: {', '.join(errors)}")
 
         try:
             # 创建更新的部署清单
@@ -291,10 +288,10 @@ class K8sCloudProvider(CloudProvider):
                 body=manifest
             )
             
-        except ApiException as e:
+        except Exception as e:
             if e.status == 404:
                 raise NotFoundError(f"未找到部署 {deployment_id}")
-            raise DeploymentError(f"更新部署失败: {str(e)}")
+            raise ConfigError(f"更新部署失败: {str(e)}")
 
     async def execute_operation(self, deployment_id: str, operation: str,
                               inputs: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -338,12 +335,12 @@ class K8sCloudProvider(CloudProvider):
                 return {"status": "success"}
                 
             else:
-                raise OperationError(f"不支持的操作: {operation}")
+                raise ConfigError(f"不支持的操作: {operation}")
                 
-        except ApiException as e:
+        except Exception as e:
             if e.status == 404:
                 raise NotFoundError(f"未找到部署 {deployment_id}")
-            raise OperationError(f"执行操作失败: {str(e)}")
+            raise ConfigError(f"执行操作失败: {str(e)}")
 
     async def get_logs(self, deployment_id: str, resource_id: Optional[str] = None,
                       start_time: Optional[datetime] = None,
@@ -378,10 +375,10 @@ class K8sCloudProvider(CloudProvider):
                         
             return logs
             
-        except ApiException as e:
+        except Exception as e:
             if e.status == 404:
                 raise NotFoundError(f"未找到部署 {deployment_id}")
-            raise CloudError(f"获取日志失败: {str(e)}")
+            raise ConfigError(f"获取日志失败: {str(e)}")
 
     async def get_metrics(self, deployment_id: str, resource_id: Optional[str] = None,
                          metric_names: List[str] = None,
@@ -422,10 +419,10 @@ class K8sCloudProvider(CloudProvider):
                     
             return metrics
             
-        except ApiException as e:
+        except Exception as e:
             if e.status == 404:
                 raise NotFoundError(f"未找到部署 {deployment_id}")
-            raise CloudError(f"获取指标失败: {str(e)}")
+            raise ConfigError(f"获取指标失败: {str(e)}")
 
     def _parse_cpu(self, cpu: str) -> float:
         """解析CPU指标"""

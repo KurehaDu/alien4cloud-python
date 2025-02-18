@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import APIRouter, File, UploadFile, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import yaml
@@ -7,18 +7,18 @@ from fastapi import Depends
 
 from alien4cloud.core.tosca.parser.workflow import WorkflowDefinitionParser
 from alien4cloud.core.workflow.models import WorkflowTemplate, WorkflowInstance
-from alien4cloud.core.workflow.state import WorkflowState, StateManager
+from alien4cloud.core.workflow.state import StateManager
 from alien4cloud.core.workflow.converter import WorkflowConverter
 from alien4cloud.core.workflow.executor import WorkflowExecutor
-from alien4cloud.core.workflow.scheduler import WorkflowScheduler, SchedulerConfig
-from alien4cloud.core.database import get_db, DatabaseError
+from alien4cloud.core.workflow.scheduler import WorkflowScheduler
+from alien4cloud.core.database import get_db, SQLALCHEMY_DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 # 创建工作流执行器和调度器
-state_manager = StateManager("sqlite:///alien4cloud.db")
+state_manager = StateManager(SQLALCHEMY_DATABASE_URL)
 executor = WorkflowExecutor(state_manager)
 scheduler = WorkflowScheduler(state_manager, executor)
 
@@ -63,7 +63,7 @@ async def create_template(
             name=name,
             description=description,
             yaml_content=yaml_content,
-            parsed_data=parsed_data.to_dict()
+            parsed_data=parsed_data
         )
         db.add(template)
         db.commit()
@@ -90,7 +90,7 @@ async def create_instance(
     name: str, 
     cloud_provider: str = "mock", 
     db: Session = Depends(get_db)
-) -> WorkflowInstance:
+) -> Dict[str, Any]:
     """从模板创建工作流实例"""
     try:
         template = db.query(WorkflowTemplate).filter(WorkflowTemplate.id == template_id).first()
@@ -108,31 +108,31 @@ async def create_instance(
             name=name,
             template_id=template_id,
             cloud_provider=cloud_provider,
-            status=WorkflowState.CREATED.value,
-            nodes_status={}  # 初始化节点状态
+            status="CREATED",
+            nodes_status={}
         )
         db.add(instance)
         db.commit()
         db.refresh(instance)
 
         # 保存工作流状态
-        state_manager.create_workflow(str(instance.id), name, workflow.inputs)
+        state_manager.create_workflow(str(instance.id), name, workflow.get("inputs"))
 
         logger.info(f"创建工作流实例成功: {instance.id}")
-        return instance
+        return {"message": "创建成功", "data": instance}
     except Exception as e:
         db.rollback()
         logger.error(f"创建工作流实例失败: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/instance/{instance_id}")
-async def get_instance(instance_id: int, db: Session = Depends(get_db)) -> WorkflowInstance:
+async def get_instance(instance_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """获取工作流实例"""
     instance = db.query(WorkflowInstance).filter(WorkflowInstance.id == instance_id).first()
     if not instance:
         logger.warning(f"工作流实例未找到: {instance_id}")
         raise HTTPException(status_code=404, detail="实例未找到")
-    return instance
+    return {"message": "获取成功", "data": instance}
 
 @router.get("/instance/{instance_id}/status")
 async def get_instance_status(instance_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
@@ -151,7 +151,7 @@ async def get_instance_status(instance_id: int, db: Session = Depends(get_db)) -
                 "instance_id": instance.id,
                 "status": instance.status,
                 "nodes_status": instance.nodes_status,
-                "workflow_status": workflow_status.to_dict()
+                "workflow_status": workflow_status
             }
         else:
             return {
@@ -166,7 +166,6 @@ async def get_instance_status(instance_id: int, db: Session = Depends(get_db)) -
 @router.post("/deploy/{instance_id}")
 async def deploy_workflow(
     instance_id: int, 
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ) -> Dict[str, Any]:
     """部署工作流实例"""
@@ -177,13 +176,13 @@ async def deploy_workflow(
             raise HTTPException(status_code=404, detail="实例未找到")
 
         # 检查状态
-        if instance.status not in [WorkflowState.CREATED.value, WorkflowState.FAILED.value]:
+        if instance.status not in ["CREATED", "FAILED"]:
             raise HTTPException(status_code=400, detail=f"工作流状态不正确: {instance.status}")
 
         # 调度工作流
-        background_tasks.add_task(scheduler.schedule_workflow, str(instance_id))
+        await scheduler.schedule_workflow(str(instance_id))
 
-        instance.status = WorkflowState.PENDING.value
+        instance.status = "PENDING"
         instance.nodes_status = {"status": "deploying"}
         db.commit()
 
@@ -206,7 +205,7 @@ async def undeploy_workflow(instance_id: int, db: Session = Depends(get_db)) -> 
         # 取消工作流执行
         await executor.cancel_workflow(str(instance_id))
 
-        instance.status = WorkflowState.CANCELLED.value
+        instance.status = "CANCELLED"
         instance.nodes_status = {"status": "undeployed"}
         db.commit()
 
@@ -232,7 +231,7 @@ async def get_workflow_status(db: Session = Depends(get_db)) -> List[Dict[str, A
             # 获取详细状态
             workflow_status = state_manager.get_workflow_status(str(instance.id))
             if workflow_status:
-                status["workflow_status"] = workflow_status.to_dict()
+                status["workflow_status"] = workflow_status
             result.append(status)
         return result
     except Exception as e:

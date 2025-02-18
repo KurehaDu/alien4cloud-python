@@ -14,13 +14,23 @@ logger = logging.getLogger(__name__)
 class StateManager:
     """工作流状态管理器"""
     
-    def __init__(self, data_dir: str = "/var/lib/alien4cloud"):
+    def __init__(self, db_url: str = None):
         """初始化状态管理器"""
-        self.data_dir = data_dir
-        self._workflows: Dict[str, WorkflowState] = {}
-        self._templates: Dict[str, WorkflowTemplate] = {}
-        self._instances: Dict[str, WorkflowInstance] = {}
-        self._load_from_file()
+        self._states: Dict[str, Dict[str, Any]] = {}
+        self._db_url = db_url
+        
+    def get_workflow_state(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """获取工作流状态"""
+        return self._states.get(workflow_id)
+        
+    def set_workflow_state(self, workflow_id: str, state: Dict[str, Any]) -> None:
+        """设置工作流状态"""
+        self._states[workflow_id] = state
+        
+    def delete_workflow_state(self, workflow_id: str) -> None:
+        """删除工作流状态"""
+        if workflow_id in self._states:
+            del self._states[workflow_id]
 
     def _load_from_file(self) -> None:
         """从文件加载状态"""
@@ -64,101 +74,98 @@ class StateManager:
             return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
         return obj
 
-    def create_workflow(self, workflow_id: str, name: str, inputs: Dict[str, Any] = None) -> WorkflowState:
+    def create_workflow(self, workflow_id: str, name: str, inputs: Dict[str, Any] = None) -> Dict[str, Any]:
         """创建工作流状态"""
-        if workflow_id in self._workflows:
-            raise ValueError(f"工作流 {workflow_id} 已存在")
+        state = {
+            "id": workflow_id,
+            "name": name,
+            "inputs": inputs or {},
+            "status": "CREATED",
+            "created_at": datetime.now().isoformat(),
+            "steps": {}
+        }
+        self._states[workflow_id] = state
+        return state
 
-        workflow = WorkflowState(
-            id=workflow_id,
-            name=name,
-            inputs=inputs or {}
-        )
-        self._workflows[workflow_id] = workflow
-        self._save_to_file()
-        return workflow
-
-    def get_workflow_status(self, workflow_id: str) -> Optional[WorkflowState]:
+    def get_workflow_status(self, workflow_id: str) -> Optional[Dict[str, Any]]:
         """获取工作流状态"""
-        return self._workflows.get(workflow_id)
+        return self._states.get(workflow_id)
 
-    def update_workflow_state(self, workflow_id: str, status: WorkflowStatus, 
-                            error_message: Optional[str] = None) -> WorkflowState:
+    def update_workflow_state(self, workflow_id: str, status: str, 
+                            error_message: Optional[str] = None) -> Dict[str, Any]:
         """更新工作流状态"""
-        workflow = self._workflows.get(workflow_id)
-        if not workflow:
+        state = self._states.get(workflow_id)
+        if not state:
             raise ValueError(f"工作流 {workflow_id} 不存在")
 
-        workflow.status = status
-        if status == WorkflowStatus.RUNNING and not workflow.started_at:
-            workflow.started_at = datetime.now()
-        elif status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]:
-            workflow.completed_at = datetime.now()
+        state["status"] = status
+        if status == "RUNNING" and "started_at" not in state:
+            state["started_at"] = datetime.now().isoformat()
+        elif status in ["COMPLETED", "FAILED", "CANCELLED"]:
+            state["completed_at"] = datetime.now().isoformat()
         
         if error_message:
-            workflow.error_message = error_message
+            state["error_message"] = error_message
 
-        self._save_to_file()
-        return workflow
+        return state
 
     def update_step_state(self, workflow_id: str, step_id: str, 
-                         status: StepStatus, error_message: Optional[str] = None,
-                         outputs: Dict[str, Any] = None) -> StepState:
+                         status: str, error_message: Optional[str] = None,
+                         outputs: Dict[str, Any] = None) -> Dict[str, Any]:
         """更新步骤状态"""
-        workflow = self._workflows.get(workflow_id)
-        if not workflow:
+        state = self._states.get(workflow_id)
+        if not state:
             raise ValueError(f"工作流 {workflow_id} 不存在")
 
-        step = workflow.steps.get(step_id)
+        step = state["steps"].get(step_id)
         if not step:
             raise ValueError(f"步骤 {step_id} 不存在")
 
-        step.status = status
-        if status == StepStatus.RUNNING and not step.started_at:
-            step.started_at = datetime.now()
-        elif status in [StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.SKIPPED]:
-            step.completed_at = datetime.now()
+        step["state"] = status
+        if status == "RUNNING" and "started_at" not in step:
+            step["started_at"] = datetime.now().isoformat()
+        elif status in ["COMPLETED", "FAILED", "SKIPPED"]:
+            step["completed_at"] = datetime.now().isoformat()
 
         if error_message:
-            step.error_message = error_message
+            step["error_message"] = error_message
         if outputs:
-            step.outputs.update(outputs)
+            step["outputs"].update(outputs)
 
-        self._save_to_file()
         return step
 
-    def add_step(self, workflow_id: str, step_id: str, name: str) -> StepState:
+    def add_step(self, workflow_id: str, step_id: str, name: str) -> Dict[str, Any]:
         """添加工作流步骤"""
-        workflow = self._workflows.get(workflow_id)
-        if not workflow:
+        state = self._states.get(workflow_id)
+        if not state:
             raise ValueError(f"工作流 {workflow_id} 不存在")
 
-        if step_id in workflow.steps:
+        if step_id in state["steps"]:
             raise ValueError(f"步骤 {step_id} 已存在")
 
-        step = StepState(
-            id=step_id,
-            name=name,
-            status=StepStatus.PENDING
-        )
-        workflow.steps[step_id] = step
-        self._save_to_file()
+        step = {
+            "id": step_id,
+            "name": name,
+            "state": "PENDING",
+            "outputs": {}
+        }
+        state["steps"][step_id] = step
         return step
 
-    def list_workflows(self, filters: Dict[str, Any] = None) -> List[WorkflowState]:
+    def list_workflows(self, filters: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """列出工作流状态"""
         if not filters:
-            return list(self._workflows.values())
+            return list(self._states.values())
 
         result = []
-        for workflow in self._workflows.values():
+        for state in self._states.values():
             match = True
             for key, value in filters.items():
-                if hasattr(workflow, key) and getattr(workflow, key) != value:
+                if key in state and state[key] != value:
                     match = False
                     break
             if match:
-                result.append(workflow)
+                result.append(state)
         return result
 
     def cleanup_completed_workflows(self, max_age_days: int = 30) -> int:
