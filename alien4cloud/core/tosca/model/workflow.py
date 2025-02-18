@@ -87,7 +87,7 @@ class WorkflowDefinition(BaseModel):
 @dataclass
 class WorkflowTemplate(BaseModel):
     """工作流模板模型"""
-    workflow: WorkflowDefinition
+    workflow: WorkflowDefinition = field(default_factory=dict)
     description: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
