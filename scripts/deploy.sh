@@ -310,6 +310,26 @@ install_python() {
 install_nginx() {
     log_info "安装Nginx..."
     
+    # 检查80端口占用
+    if netstat -tuln | grep -q ":80 "; then
+        log_warn "端口80已被占用，尝试停止占用进程..."
+        
+        # 检查是否是系统Nginx
+        if systemctl is-active nginx &>/dev/null; then
+            log_info "停止系统Nginx服务..."
+            systemctl stop nginx
+            systemctl disable nginx
+        fi
+        
+        # 获取占用进程信息
+        local pid=$(lsof -t -i:80)
+        if [ -n "$pid" ]; then
+            log_info "终止占用端口80的进程 (PID: $pid)..."
+            kill -9 $pid || handle_error "无法终止占用端口80的进程"
+            sleep 2
+        fi
+    fi
+    
     # 创建Nginx配置
     cat > /etc/nginx/conf.d/alien4cloud.conf << EOF
 server {
@@ -345,8 +365,14 @@ EOF
     # 设置Nginx用户权限
     usermod -a -G ${GROUP} www-data
     
-    # 重启Nginx
-    systemctl restart nginx || handle_error "无法重启Nginx"
+    # 确保Nginx配置正确
+    nginx -t || handle_error "Nginx配置测试失败"
+    
+    # 停止系统Nginx服务
+    if systemctl is-active nginx &>/dev/null; then
+        systemctl stop nginx
+        systemctl disable nginx
+    fi
 }
 
 # 创建服务用户
@@ -498,7 +524,7 @@ environment=PATH="${INSTALL_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sb
 priority=100
 
 [program:nginx]
-command=nginx -g "daemon off;"
+command=/usr/sbin/nginx -g "daemon off;"
 user=root
 autostart=true
 autorestart=true
@@ -520,6 +546,9 @@ EOF
     mkdir -p ${LOG_DIR}/supervisor
     chown -R ${USER}:${GROUP} ${LOG_DIR}/supervisor
     
+    # 停止所有已存在的服务
+    supervisorctl stop all &>/dev/null || true
+    
     # 重新加载Supervisor配置
     supervisorctl reread || handle_error "无法重新加载Supervisor配置"
     supervisorctl update || handle_error "无法更新Supervisor配置"
@@ -532,6 +561,18 @@ EOF
         if [ $retry_count -eq $MAX_RETRIES ]; then
             log_error "查看错误日志: ${LOG_DIR}/supervisor/alien4cloud.err.log"
             cat "${LOG_DIR}/supervisor/alien4cloud.err.log"
+        fi
+        sleep $RETRY_INTERVAL
+    done
+    
+    # 等待Nginx服务启动
+    retry_count=0
+    while ! supervisorctl status alien4cloud:nginx | grep -q "RUNNING" && [ $retry_count -lt $MAX_RETRIES ]; do
+        retry_count=$((retry_count + 1))
+        log_warn "等待nginx服务启动 ($retry_count/$MAX_RETRIES)"
+        if [ $retry_count -eq $MAX_RETRIES ]; then
+            log_error "查看错误日志: ${LOG_DIR}/supervisor/nginx.err.log"
+            cat "${LOG_DIR}/supervisor/nginx.err.log"
         fi
         sleep $RETRY_INTERVAL
     done
