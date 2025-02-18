@@ -8,8 +8,11 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 
-from .models import Base, WorkflowModel, StepModel
-from .state import WorkflowState, StepState, WorkflowStatus, StepStatus
+from .models import (
+    Base, WorkflowModel, StepModel,
+    WorkflowState, StepState,
+    WorkflowStatus, StepStatus
+)
 
 logger = logging.getLogger(__name__)
 
