@@ -368,19 +368,61 @@ create_service_user() {
 create_directories() {
     log_info "创建目录结构..."
     
-    # 创建数据和日志目录
-    mkdir -p ${DATA_DIR}/{templates,instances,storage}
-    mkdir -p ${LOG_DIR}/{app,nginx,supervisor}
+    # 检查并清理已存在的目录
+    if [ -d "${INSTALL_DIR}" ]; then
+        log_warn "安装目录已存在: ${INSTALL_DIR}"
+        if [ -d "${INSTALL_DIR}/.git" ]; then
+            log_info "保留git仓库目录"
+        else
+            rm -rf "${INSTALL_DIR}"
+            mkdir -p "${INSTALL_DIR}"
+        fi
+    else
+        mkdir -p "${INSTALL_DIR}"
+    fi
+
+    # 检查并清理数据目录
+    if [ -d "${DATA_DIR}" ]; then
+        log_warn "数据目录已存在: ${DATA_DIR}"
+        local backup_dir="${DATA_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
+        mv "${DATA_DIR}" "${backup_dir}"
+        log_info "已备份数据目录到: ${backup_dir}"
+    fi
+    
+    # 创建数据目录结构
+    mkdir -p "${DATA_DIR}"/{templates,instances,storage}
+    mkdir -p "${DATA_DIR}"/k8s
+    
+    # 创建日志目录结构
+    mkdir -p "${LOG_DIR}"/{app,nginx,supervisor}
+    
+    # 创建必要的日志文件
+    touch "${LOG_DIR}/app/alien4cloud.log"
+    touch "${LOG_DIR}/supervisor/alien4cloud.err.log"
+    touch "${LOG_DIR}/supervisor/alien4cloud.out.log"
+    touch "${LOG_DIR}/supervisor/nginx.err.log"
+    touch "${LOG_DIR}/supervisor/nginx.out.log"
     
     # 创建临时目录
-    mkdir -p ${INSTALL_DIR}/tmp
+    mkdir -p "${INSTALL_DIR}/tmp"
+    
+    # 创建配置目录
+    mkdir -p "${INSTALL_DIR}/etc"
     
     # 设置权限
-    chown -R ${USER}:${GROUP} ${INSTALL_DIR}
-    chown -R ${USER}:${GROUP} ${DATA_DIR}
-    chown -R ${USER}:${GROUP} ${LOG_DIR}
+    chown -R "${USER}:${GROUP}" "${INSTALL_DIR}"
+    chown -R "${USER}:${GROUP}" "${DATA_DIR}"
+    chown -R "${USER}:${GROUP}" "${LOG_DIR}"
     
-    chmod 755 ${INSTALL_DIR} ${DATA_DIR} ${LOG_DIR}
+    # 设置目录权限
+    find "${INSTALL_DIR}" -type d -exec chmod 755 {} \;
+    find "${DATA_DIR}" -type d -exec chmod 755 {} \;
+    find "${LOG_DIR}" -type d -exec chmod 755 {} \;
+    
+    # 设置文件权限
+    find "${LOG_DIR}" -type f -exec chmod 644 {} \;
+    
+    log_info "目录结构创建完成"
 }
 
 # 配置应用
@@ -596,28 +638,40 @@ rollback() {
     log_error "执行回滚: $error_msg"
     
     # 停止服务
-    supervisorctl stop all &> /dev/null || true
-    systemctl stop nginx &> /dev/null || true
+    supervisorctl stop alien4cloud:* &> /dev/null || true
     
-    # 备份数据
+    # 备份数据目录（如果存在）
     if [ -d "${DATA_DIR}" ] && [ -n "$(ls -A ${DATA_DIR})" ]; then
         local backup_dir="${DATA_DIR}_backup_$(date +%Y%m%d_%H%M%S)"
         mv "${DATA_DIR}" "${backup_dir}"
         log_info "数据已备份到: ${backup_dir}"
     fi
     
-    # 清理安装
+    # 清理安装目录（保留git仓库）
     if [ -d "${INSTALL_DIR}" ]; then
-        rm -rf "${INSTALL_DIR}"
+        if [ -d "${INSTALL_DIR}/.git" ]; then
+            # 保留.git目录，清理其他文件
+            find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+        else
+            rm -rf "${INSTALL_DIR}"
+        fi
     fi
     
-    # 移除配置
-    rm -f /etc/nginx/conf.d/alien4cloud.conf
+    # 移除supervisor配置
     rm -f /etc/supervisor/conf.d/alien4cloud.conf
     
-    # 恢复系统配置
-    if [ -f /etc/apt/sources.list.bak ]; then
-        mv /etc/apt/sources.list.bak /etc/apt/sources.list
+    # 移除nginx配置
+    rm -f /etc/nginx/conf.d/alien4cloud.conf
+    
+    # 重新加载supervisor配置
+    supervisorctl reread &> /dev/null || true
+    supervisorctl update &> /dev/null || true
+    
+    # 保存部署日志
+    if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+        local error_log="${LOG_DIR}/deploy_error_$(date +%Y%m%d_%H%M%S).log"
+        cp "$LOG_FILE" "$error_log"
+        log_info "部署日志已保存到: $error_log"
     fi
     
     log_error "回滚完成。请检查日志并解决问题后重新运行安装脚本。"
