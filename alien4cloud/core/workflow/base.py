@@ -3,10 +3,6 @@ from enum import Enum
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 
-from sqlalchemy.orm import declarative_base
-
-Base = declarative_base()
-
 class WorkflowStatus(str, Enum):
     """工作流状态"""
     CREATED = "created"         # 已创建
@@ -51,4 +47,27 @@ class WorkflowState:
     error_message: Optional[str] = None
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict) 
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class WorkflowTemplate:
+    """工作流模板"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    yaml_content: str = ""  # 原始YAML内容
+    parsed_data: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+
+@dataclass
+class WorkflowInstance:
+    """工作流实例"""
+    id: str
+    template_id: str
+    name: str
+    status: WorkflowStatus = WorkflowStatus.CREATED
+    nodes_status: Dict[str, Any] = field(default_factory=dict)
+    cloud_provider: str = "mock"  # mock, k8s
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now) 

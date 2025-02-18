@@ -1,51 +1,82 @@
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+import json
+import os
 
-from .base import WorkflowState, StepState, WorkflowStatus, StepStatus
-from .database import Database, DatabaseError
+from .base import (
+    WorkflowState, StepState, WorkflowStatus, StepStatus,
+    WorkflowTemplate, WorkflowInstance
+)
 
 logger = logging.getLogger(__name__)
 
 class StateManager:
     """工作流状态管理器"""
     
-    def __init__(self, database_url: str):
+    def __init__(self, data_dir: str = "/var/lib/alien4cloud"):
         """初始化状态管理器"""
-        self.db = Database(database_url)
+        self.data_dir = data_dir
         self._workflows: Dict[str, WorkflowState] = {}
-        self._load_from_db()
+        self._templates: Dict[str, WorkflowTemplate] = {}
+        self._instances: Dict[str, WorkflowInstance] = {}
+        self._load_from_file()
 
-    def _load_from_db(self) -> None:
-        """从数据库加载工作流状态"""
+    def _load_from_file(self) -> None:
+        """从文件加载状态"""
         try:
-            workflows = self.db.list_workflows()
-            for workflow in workflows:
-                self._workflows[workflow.id] = workflow
-        except DatabaseError as e:
-            logger.error(f"从数据库加载工作流状态失败: {str(e)}")
+            if not os.path.exists(self.data_dir):
+                os.makedirs(self.data_dir)
+            
+            state_file = os.path.join(self.data_dir, "state.json")
+            if os.path.exists(state_file):
+                with open(state_file, "r") as f:
+                    data = json.load(f)
+                    for wf_data in data.get("workflows", []):
+                        wf = WorkflowState(**wf_data)
+                        self._workflows[wf.id] = wf
+                    for tmpl_data in data.get("templates", []):
+                        tmpl = WorkflowTemplate(**tmpl_data)
+                        self._templates[tmpl.id] = tmpl
+                    for inst_data in data.get("instances", []):
+                        inst = WorkflowInstance(**inst_data)
+                        self._instances[inst.id] = inst
+        except Exception as e:
+            logger.error(f"加载状态失败: {str(e)}")
+
+    def _save_to_file(self) -> None:
+        """保存状态到文件"""
+        try:
+            state_file = os.path.join(self.data_dir, "state.json")
+            data = {
+                "workflows": [self._to_dict(wf) for wf in self._workflows.values()],
+                "templates": [self._to_dict(tmpl) for tmpl in self._templates.values()],
+                "instances": [self._to_dict(inst) for inst in self._instances.values()]
+            }
+            with open(state_file, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"保存状态失败: {str(e)}")
+
+    def _to_dict(self, obj: Any) -> Dict[str, Any]:
+        """转换对象为字典"""
+        if hasattr(obj, "__dict__"):
+            return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
+        return obj
 
     def create_workflow(self, workflow_id: str, name: str, inputs: Dict[str, Any] = None) -> WorkflowState:
         """创建工作流状态"""
         if workflow_id in self._workflows:
             raise ValueError(f"工作流 {workflow_id} 已存在")
 
-        status = WorkflowState(
+        workflow = WorkflowState(
             id=workflow_id,
             name=name,
-            status=WorkflowStatus.CREATED,
             inputs=inputs or {}
         )
-        self._workflows[workflow_id] = status
-        
-        try:
-            self.db.save_workflow(status)
-        except DatabaseError as e:
-            logger.error(f"保存工作流状态失败: {str(e)}")
-            del self._workflows[workflow_id]
-            raise
-        
-        return status
+        self._workflows[workflow_id] = workflow
+        self._save_to_file()
+        return workflow
 
     def get_workflow_status(self, workflow_id: str) -> Optional[WorkflowState]:
         """获取工作流状态"""
@@ -67,12 +98,7 @@ class StateManager:
         if error_message:
             workflow.error_message = error_message
 
-        try:
-            self.db.save_workflow(workflow)
-        except DatabaseError as e:
-            logger.error(f"保存工作流状态失败: {str(e)}")
-            raise
-
+        self._save_to_file()
         return workflow
 
     def update_step_state(self, workflow_id: str, step_id: str, 
@@ -98,12 +124,7 @@ class StateManager:
         if outputs:
             step.outputs.update(outputs)
 
-        try:
-            self.db.save_workflow(workflow)
-        except DatabaseError as e:
-            logger.error(f"保存工作流状态失败: {str(e)}")
-            raise
-
+        self._save_to_file()
         return step
 
     def add_step(self, workflow_id: str, step_id: str, name: str) -> StepState:
@@ -121,14 +142,7 @@ class StateManager:
             status=StepStatus.PENDING
         )
         workflow.steps[step_id] = step
-
-        try:
-            self.db.save_workflow(workflow)
-        except DatabaseError as e:
-            logger.error(f"保存工作流状态失败: {str(e)}")
-            del workflow.steps[step_id]
-            raise
-
+        self._save_to_file()
         return step
 
     def list_workflows(self, filters: Dict[str, Any] = None) -> List[WorkflowState]:
@@ -149,16 +163,14 @@ class StateManager:
 
     def cleanup_completed_workflows(self, max_age_days: int = 30) -> int:
         """清理已完成的工作流"""
-        try:
-            count = self.db.cleanup_workflows(max_age_days)
-            # 从内存中移除已清理的工作流
-            cutoff_date = datetime.now() - timedelta(days=max_age_days)
-            for workflow_id in list(self._workflows.keys()):
-                workflow = self._workflows[workflow_id]
-                if (workflow.status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED] and
-                    workflow.completed_at and workflow.completed_at <= cutoff_date):
-                    del self._workflows[workflow_id]
-            return count
-        except DatabaseError as e:
-            logger.error(f"清理工作流失败: {str(e)}")
-            raise 
+        cutoff_date = datetime.now() - timedelta(days=max_age_days)
+        count = 0
+        for workflow_id in list(self._workflows.keys()):
+            workflow = self._workflows[workflow_id]
+            if (workflow.status in [WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED] and
+                workflow.completed_at and workflow.completed_at <= cutoff_date):
+                del self._workflows[workflow_id]
+                count += 1
+        if count > 0:
+            self._save_to_file()
+        return count 
