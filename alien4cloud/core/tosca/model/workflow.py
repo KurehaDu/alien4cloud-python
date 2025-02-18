@@ -45,7 +45,7 @@ class WorkflowStep:
 @dataclass
 class WorkflowDefinition(BaseModel):
     """工作流定义模型"""
-    workflow: Dict[str, WorkflowStep]
+    workflow: Dict[str, WorkflowStep] = field(default_factory=dict)
     steps: Dict[str, WorkflowStep] = field(default_factory=dict)
     inputs: Dict[str, Any] = field(default_factory=dict)
     preconditions: List[str] = field(default_factory=list)
