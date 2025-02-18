@@ -495,6 +495,7 @@ stopsignal=TERM
 stderr_logfile=${LOG_DIR}/supervisor/alien4cloud.err.log
 stdout_logfile=${LOG_DIR}/supervisor/alien4cloud.out.log
 environment=PATH="${INSTALL_DIR}/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",PYTHONPATH="${INSTALL_DIR}",CONFIG_FILE="${INSTALL_DIR}/etc/config.yaml"
+priority=100
 
 [program:nginx]
 command=nginx -g "daemon off;"
@@ -507,6 +508,8 @@ stopwaitsecs=30
 stopsignal=QUIT
 stderr_logfile=${LOG_DIR}/supervisor/nginx.err.log
 stdout_logfile=${LOG_DIR}/supervisor/nginx.out.log
+priority=200
+depends_on=alien4cloud
 
 [group:alien4cloud]
 programs=alien4cloud,nginx
@@ -523,9 +526,13 @@ EOF
     
     # 等待服务启动
     local retry_count=0
-    while ! supervisorctl status | grep -q "RUNNING" && [ $retry_count -lt $MAX_RETRIES ]; do
+    while ! supervisorctl status alien4cloud:alien4cloud | grep -q "RUNNING" && [ $retry_count -lt $MAX_RETRIES ]; do
         retry_count=$((retry_count + 1))
-        log_warn "等待服务启动 ($retry_count/$MAX_RETRIES)"
+        log_warn "等待alien4cloud服务启动 ($retry_count/$MAX_RETRIES)"
+        if [ $retry_count -eq $MAX_RETRIES ]; then
+            log_error "查看错误日志: ${LOG_DIR}/supervisor/alien4cloud.err.log"
+            cat "${LOG_DIR}/supervisor/alien4cloud.err.log"
+        fi
         sleep $RETRY_INTERVAL
     done
 }
@@ -534,20 +541,26 @@ EOF
 health_check() {
     log_info "执行健康检查..."
     
-    # 检查服务状态
-    if ! systemctl is-active --quiet nginx; then
-        log_error "服务 nginx 未正常运行"
+    # 检查supervisor服务状态
+    if ! supervisorctl status alien4cloud:alien4cloud | grep -q "RUNNING"; then
+        log_error "alien4cloud服务未运行"
+        log_error "查看错误日志: ${LOG_DIR}/supervisor/alien4cloud.err.log"
+        cat "${LOG_DIR}/supervisor/alien4cloud.err.log"
         return 1
     fi
     
-    if ! systemctl is-active --quiet supervisor; then
-        log_error "服务 supervisor 未正常运行"
+    if ! supervisorctl status alien4cloud:nginx | grep -q "RUNNING"; then
+        log_error "nginx服务未运行"
+        log_error "查看错误日志: ${LOG_DIR}/supervisor/nginx.err.log"
+        cat "${LOG_DIR}/supervisor/nginx.err.log"
         return 1
     fi
     
     # 检查端口
     if ! netstat -tuln | grep -q ":${PORT} "; then
         log_error "API端口 ${PORT} 未正常监听"
+        log_error "查看错误日志: ${LOG_DIR}/supervisor/alien4cloud.err.log"
+        cat "${LOG_DIR}/supervisor/alien4cloud.err.log"
         return 1
     fi
     
@@ -559,8 +572,7 @@ health_check() {
     
     # 检查数据库和目录
     if [ ! -f "${DATA_DIR}/alien4cloud.db" ]; then
-        log_error "数据库文件不存在"
-        return 1
+        log_warn "数据库文件不存在，将在首次运行时创建"
     fi
     
     # 检查MicroK8s（如果启用）
@@ -574,6 +586,15 @@ health_check() {
             log_error "K8s配置文件不存在"
             return 1
         fi
+    fi
+    
+    # 测试API健康检查接口
+    local health_check_url="http://localhost:${PORT}/health"
+    if ! curl -s "${health_check_url}" | grep -q "ok"; then
+        log_error "API健康检查失败: ${health_check_url}"
+        log_error "查看错误日志: ${LOG_DIR}/supervisor/alien4cloud.err.log"
+        cat "${LOG_DIR}/supervisor/alien4cloud.err.log"
+        return 1
     fi
     
     log_info "健康检查通过"
