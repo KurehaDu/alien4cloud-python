@@ -1,107 +1,100 @@
-from typing import Any, Dict, Set
-from .base import BaseParser, ParserError
-from ..model.workflow import (
-    WorkflowDefinition, 
-    WorkflowTemplate, 
-    WorkflowStep,
-    WorkflowStepType
-)
+from typing import Dict, Any
+import yaml
+import logging
+from datetime import datetime
 
-class WorkflowDefinitionParser(BaseParser):
+from ..model.workflow import WorkflowStepType
+from ...workflow.models import WorkflowTemplate, WorkflowStep
+
+logger = logging.getLogger(__name__)
+
+class ParserError(Exception):
+    """解析错误"""
+    pass
+
+class WorkflowDefinitionParser:
     """工作流定义解析器"""
     
-    def __init__(self):
-        super().__init__(WorkflowDefinition)
-
-    def parse_dict(self, data: Dict[str, Any]) -> WorkflowDefinition:
-        """解析工作流定义数据"""
-        # 验证必要字段
-        required_fields = ['id', 'name', 'workflow']
-        for field in required_fields:
-            if field not in data:
-                raise ParserError(f"缺少必要字段: {field}")
-
-        # 验证workflow
-        if not isinstance(data['workflow'], dict):
-            raise ParserError("workflow必须是字典类型")
-
-        # 验证steps
-        if 'steps' in data and not isinstance(data['steps'], dict):
-            raise ParserError("steps必须是字典类型")
-
-        # 验证步骤
-        for step_data in data.get('workflow', {}).values():
-            if 'type' not in step_data or 'target' not in step_data:
-                raise ParserError(f"步骤缺少必要字段: type 或 target")
-            
-            # 验证步骤类型
-            try:
-                WorkflowStepType(step_data['type'])
-            except ValueError:
-                raise ParserError(f"步骤类型无效: {step_data['type']}")
-
-        # 验证步骤依赖关系
-        self._validate_step_dependencies(data.get('workflow', {}))
-
-        return super().parse_dict(data)
-
-    def _validate_step_dependencies(self, steps: Dict[str, Any]) -> None:
-        """验证步骤依赖关系"""
-        step_names = set(steps.keys())
-        
-        for step_name, step_data in steps.items():
-            # 验证成功依赖
-            for dep in step_data.get('on_success', []):
-                if dep not in step_names:
-                    raise ParserError(f"步骤 '{step_name}' 的成功依赖 '{dep}' 不存在")
-            
-            # 验证失败依赖
-            for dep in step_data.get('on_failure', []):
-                if dep not in step_names:
-                    raise ParserError(f"步骤 '{step_name}' 的失败依赖 '{dep}' 不存在")
-            
-            # 检查循环依赖
-            self._check_circular_dependencies(step_name, steps)
-
-    def _check_circular_dependencies(self, start_step: str, steps: Dict[str, Any], visited: Set[str] = None) -> None:
-        """检查循环依赖"""
-        if visited is None:
-            visited = set()
-        
-        if start_step in visited:
-            raise ParserError(f"检测到循环依赖: {start_step}")
-        
-        visited.add(start_step)
-        step_data = steps.get(start_step, {})
-        
-        # 检查所有依赖
-        for dep in step_data.get('on_success', []) + step_data.get('on_failure', []):
-            self._check_circular_dependencies(dep, steps, visited.copy())
-
-class WorkflowTemplateParser(BaseParser):
-    """工作流模板解析器"""
-    
-    def __init__(self):
-        super().__init__(WorkflowTemplate)
-        self.workflow_parser = WorkflowDefinitionParser()
-
-    def parse_dict(self, data: Dict[str, Any]) -> WorkflowTemplate:
-        """解析工作流模板数据"""
-        # 验证必要字段
-        required_fields = ['id', 'name', 'workflow']
-        for field in required_fields:
-            if field not in data:
-                raise ParserError(f"缺少必要字段: {field}")
-
-        # 验证工作流定义
-        if not isinstance(data['workflow'], dict):
-            raise ParserError("workflow必须是字典类型")
-
-        # 使用工作流解析器验证工作流定义
+    def parse(self, data: Dict[str, Any]) -> WorkflowTemplate:
+        """解析工作流定义"""
         try:
-            workflow = self.workflow_parser.parse_dict(data['workflow'])
-            data['workflow'] = workflow
-        except ParserError as e:
-            raise ParserError(f"工作流定义验证失败: {str(e)}")
+            # 验证必要字段
+            if "tosca_definitions_version" not in data:
+                raise ParserError("缺少TOSCA版本定义")
+            if "topology_template" not in data:
+                raise ParserError("缺少拓扑模板定义")
+            if "workflows" not in data["topology_template"]:
+                raise ParserError("缺少工作流定义")
 
-        return super().parse_dict(data) 
+            # 获取第一个工作流定义
+            workflow_name = next(iter(data["topology_template"]["workflows"]))
+            workflow_def = data["topology_template"]["workflows"][workflow_name]
+
+            # 创建工作流模板
+            template = WorkflowTemplate(
+                id=f"wf-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+                name=workflow_name,
+                description=workflow_def.get("description"),
+                inputs=workflow_def.get("inputs", {}),
+                outputs=workflow_def.get("outputs", {})
+            )
+
+            # 解析步骤
+            steps = workflow_def.get("steps", {})
+            for step_id, step_def in steps.items():
+                step = self._parse_step(step_id, step_def)
+                template.steps[step_id] = step
+
+            return template
+        except Exception as e:
+            raise ParserError(f"解析工作流定义失败: {str(e)}")
+
+    def _parse_step(self, step_id: str, step_def: Dict[str, Any]) -> WorkflowStep:
+        """解析工作流步骤"""
+        # 确定步骤类型
+        step_type = None
+        if "node_operation" in step_def:
+            step_type = WorkflowStepType.NODE_OPERATION.value
+            operation = step_def["node_operation"]
+            target = step_def.get("target")
+        elif "relationship_operation" in step_def:
+            step_type = WorkflowStepType.RELATIONSHIP_OPERATION.value
+            operation = step_def["relationship_operation"]
+            target = step_def.get("target_relationship")
+        elif "call_operation" in step_def:
+            step_type = WorkflowStepType.CALL_OPERATION.value
+            operation = step_def["call_operation"]
+            target = None
+        else:
+            step_type = WorkflowStepType.INLINE.value
+            operation = None
+            target = None
+
+        # 创建步骤
+        return WorkflowStep(
+            id=step_id,
+            name=step_def.get("name", step_id),
+            type=step_type,
+            target=target,
+            operation=operation,
+            inputs=step_def.get("inputs", {}),
+            on_success=step_def.get("on_success", []),
+            on_failure=step_def.get("on_failure", [])
+        )
+
+    def parse_file(self, file_path: str) -> WorkflowTemplate:
+        """从文件解析工作流定义"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+                return self.parse(data)
+        except Exception as e:
+            raise ParserError(f"解析文件失败: {str(e)}")
+
+    def parse_string(self, content: str) -> WorkflowTemplate:
+        """从字符串解析工作流定义"""
+        try:
+            data = yaml.safe_load(content)
+            return self.parse(data)
+        except Exception as e:
+            raise ParserError(f"解析字符串失败: {str(e)}") 

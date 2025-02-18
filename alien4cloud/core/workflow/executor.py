@@ -68,163 +68,76 @@ class InlineExecutor(StepExecutor):
         # MVP版本：简单实现
         pass
 
-class WorkflowExecutor:
-    """工作流执行器"""
+class WorkflowExecutor(ABC):
+    """工作流执行器基类"""
     
     def __init__(self, state_manager: StateManager):
         self.state_manager = state_manager
-        self.executors = {
-            'node_operation': NodeOperationExecutor(),
-            'relationship_operation': RelationshipOperationExecutor(),
-            'inline': InlineExecutor()
-        }
-        self._running_workflows: Dict[str, asyncio.Task] = {}
 
-    async def execute_workflow(self, workflow_id: str) -> None:
+    @abstractmethod
+    async def execute_step(self, workflow_id: str, step_id: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """执行步骤"""
+        pass
+
+    async def execute_workflow(self, workflow_id: str, inputs: Dict[str, Any] = None) -> None:
         """执行工作流"""
-        workflow = self.state_manager.get_workflow_status(workflow_id)
+        workflow = self.state_manager.get_workflow(workflow_id)
         if not workflow:
             raise ExecutionError(f"工作流 {workflow_id} 不存在")
 
-        if workflow.state != WorkflowState.CREATED:
-            raise ExecutionError(f"工作流 {workflow_id} 状态不正确: {workflow.state}")
-
-        # 更新工作流状态为PENDING
-        self.state_manager.update_workflow_state(workflow_id, WorkflowState.PENDING)
-
-        # 创建执行任务
-        task = asyncio.create_task(self._execute_workflow_steps(workflow))
-        self._running_workflows[workflow_id] = task
+        # 更新工作流状态为运行中
+        self.state_manager.update_workflow(workflow_id, WorkflowStatus.RUNNING)
 
         try:
-            await task
-        except asyncio.CancelledError:
-            # 工作流被取消
-            self.state_manager.update_workflow_state(
-                workflow_id, 
-                WorkflowState.CANCELLED,
-                "工作流被手动取消"
-            )
+            # 按顺序执行步骤
+            for step_id, step in workflow.steps.items():
+                # 更新步骤状态为运行中
+                self.state_manager.update_step(workflow_id, step_id, StepStatus.RUNNING)
+
+                try:
+                    # 执行步骤
+                    outputs = await self.execute_step(workflow_id, step_id, inputs or {})
+                    
+                    # 更新步骤状态为完成
+                    self.state_manager.update_step(
+                        workflow_id, 
+                        step_id, 
+                        StepStatus.COMPLETED,
+                        outputs=outputs
+                    )
+                except Exception as e:
+                    # 更新步骤状态为失败
+                    logger.error(f"步骤 {step_id} 执行失败: {str(e)}")
+                    self.state_manager.update_step(
+                        workflow_id,
+                        step_id,
+                        StepStatus.FAILED,
+                        error_message=str(e)
+                    )
+                    raise ExecutionError(f"步骤 {step_id} 执行失败: {str(e)}")
+
+            # 更新工作流状态为完成
+            self.state_manager.update_workflow(workflow_id, WorkflowStatus.COMPLETED)
         except Exception as e:
-            # 工作流执行失败
-            logger.exception(f"工作流 {workflow_id} 执行失败")
-            self.state_manager.update_workflow_state(
-                workflow_id, 
-                WorkflowState.FAILED,
-                str(e)
-            )
-        finally:
-            self._running_workflows.pop(workflow_id, None)
-
-    async def cancel_workflow(self, workflow_id: str) -> None:
-        """取消工作流执行"""
-        task = self._running_workflows.get(workflow_id)
-        if task:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-    async def _execute_workflow_steps(self, workflow: WorkflowStatus) -> None:
-        """执行工作流步骤"""
-        # 更新工作流状态为RUNNING
-        self.state_manager.update_workflow_state(workflow.id, WorkflowState.RUNNING)
-
-        try:
-            # 获取所有待执行的步骤
-            pending_steps = {
-                step_id: step 
-                for step_id, step in workflow.steps.items()
-                if step.state == StepState.PENDING
-            }
-
-            # 执行步骤
-            while pending_steps:
-                # 获取可执行的步骤（没有依赖或依赖已完成的步骤）
-                executable_steps = self._get_executable_steps(workflow, pending_steps)
-                if not executable_steps:
-                    raise ExecutionError("检测到循环依赖或无法执行的步骤")
-
-                # 并行执行可执行的步骤
-                tasks = []
-                for step_id in executable_steps:
-                    step = pending_steps[step_id]
-                    task = asyncio.create_task(self._execute_step(workflow, step))
-                    tasks.append(task)
-
-                # 等待所有任务完成
-                await asyncio.gather(*tasks)
-
-                # 从待执行列表中移除已完成的步骤
-                for step_id in executable_steps:
-                    pending_steps.pop(step_id)
-
-            # 所有步骤执行完成，更新工作流状态
-            self.state_manager.update_workflow_state(workflow.id, WorkflowState.COMPLETED)
-
-        except Exception as e:
-            # 更新工作流状态为FAILED
-            self.state_manager.update_workflow_state(
-                workflow.id, 
-                WorkflowState.FAILED,
-                str(e)
-            )
-            raise
-
-    def _get_executable_steps(self, workflow: WorkflowStatus, 
-                            pending_steps: Dict[str, StepStatus]) -> List[str]:
-        """获取可执行的步骤"""
-        executable_steps = []
-        
-        for step_id, step in pending_steps.items():
-            # 检查步骤的依赖是否都已完成
-            dependencies_met = True
-            for other_id, other_step in workflow.steps.items():
-                if other_id == step_id:
-                    continue
-                if (step_id in other_step.outputs.get('on_success', []) and 
-                    other_step.state != StepState.COMPLETED):
-                    dependencies_met = False
-                    break
-                if (step_id in other_step.outputs.get('on_failure', []) and 
-                    other_step.state != StepState.FAILED):
-                    dependencies_met = False
-                    break
-            
-            if dependencies_met:
-                executable_steps.append(step_id)
-
-        return executable_steps
-
-    async def _execute_step(self, workflow: WorkflowStatus, step: StepStatus) -> None:
-        """执行单个步骤"""
-        # 更新步骤状态为RUNNING
-        self.state_manager.update_step_state(workflow.id, step.id, StepState.RUNNING)
-
-        try:
-            # 获取步骤类型对应的执行器
-            executor = self.executors.get(step.outputs.get('type', 'inline'))
-            if not executor:
-                raise ExecutionError(f"未知的步骤类型: {step.outputs.get('type')}")
-
-            # 执行步骤
-            result = await executor.execute(step, workflow.inputs)
-
-            # 更新步骤状态为COMPLETED
-            self.state_manager.update_step_state(
-                workflow.id,
-                step.id,
-                StepState.COMPLETED,
-                outputs=result
-            )
-
-        except Exception as e:
-            # 更新步骤状态为FAILED
-            self.state_manager.update_step_state(
-                workflow.id,
-                step.id,
-                StepState.FAILED,
+            # 更新工作流状态为失败
+            self.state_manager.update_workflow(
+                workflow_id,
+                WorkflowStatus.FAILED,
                 error_message=str(e)
             )
             raise
+
+class MockWorkflowExecutor(WorkflowExecutor):
+    """模拟工作流执行器"""
+    
+    async def execute_step(self, workflow_id: str, step_id: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """执行步骤"""
+        # 模拟执行时间
+        await asyncio.sleep(1)
+        
+        # 返回模拟输出
+        return {
+            "status": "success",
+            "message": f"步骤 {step_id} 执行完成",
+            "timestamp": datetime.now().isoformat()
+        }
