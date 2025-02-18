@@ -36,9 +36,12 @@ def load_config():
         }
 
 config = load_config()
+server_config = config.get("server", {})
+
+# 创建FastAPI应用
 app = FastAPI(
     title="Alien4Cloud Python",
-    debug=config.get("server", {}).get("debug", False)
+    debug=server_config.get("debug", False)
 )
 
 # CORS配置
@@ -64,11 +67,20 @@ async def health_check():
     """健康检查接口"""
     return {"status": "ok"}
 
-if __name__ == "__main__":
-    server_config = config.get("server", {})
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的事件处理"""
+    logger.info(f"服务启动于 http://{server_config.get('host', '0.0.0.0')}:{server_config.get('port', 8088)}")
+    logger.info(f"调试模式: {server_config.get('debug', False)}")
+
+def start():
+    """启动应用的函数"""
     uvicorn.run(
-        "alien4cloud.web.main:app",
+        app,
         host=server_config.get("host", "0.0.0.0"),
         port=server_config.get("port", 8088),
         reload=server_config.get("debug", False)
-    ) 
+    )
+
+if __name__ == "__main__":
+    start() 

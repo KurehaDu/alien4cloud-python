@@ -440,7 +440,7 @@ configure_supervisor() {
     # 创建Supervisor配置
     cat > /etc/supervisor/conf.d/alien4cloud.conf << EOF
 [program:alien4cloud]
-command=${INSTALL_DIR}/venv/bin/python -m uvicorn alien4cloud.web.main:app --host 0.0.0.0 --port ${PORT}
+command=${INSTALL_DIR}/venv/bin/uvicorn alien4cloud.web.main:app --host 0.0.0.0 --port ${PORT} --workers 4
 directory=${INSTALL_DIR}
 user=${USER}
 group=${GROUP}
