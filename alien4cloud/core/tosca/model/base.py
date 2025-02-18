@@ -41,7 +41,13 @@ class BaseModel:
 @dataclass
 class ToscaType(BaseModel):
     """TOSCA类型基础模型"""
+    id: str
+    name: str
     version: str
+    description: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     derived_from: Optional[str] = None
     properties: Dict[str, Any] = field(default_factory=dict)
     
