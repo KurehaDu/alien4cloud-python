@@ -15,7 +15,7 @@ class BaseModel:
     """
     id: str
     name: str
-    version: str
+    version: str = "0.1"
     description: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)

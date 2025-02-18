@@ -85,7 +85,11 @@ class WorkflowTemplate(BaseModel):
     - node_types: 节点类型列表（可选）
     - tags: 标签列表（可选）
     """
-    workflow: WorkflowDefinition
+    workflow: WorkflowDefinition = None
+    description: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
     node_types: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     
