@@ -666,7 +666,7 @@ clone_project() {
             chown -R ${USER}:${GROUP} "${INSTALL_DIR}"
             
             # 拉取最新代码
-            git pull origin main || handle_error "无法更新代码"
+            retry_command "git pull origin main" || handle_error "无法更新代码"
             return
         else
             handle_error "安装目录不为空且不是git仓库: ${INSTALL_DIR}"
