@@ -605,11 +605,26 @@ health_check() {
 clone_project() {
     log_info "克隆项目代码..."
     
+    # 配置Git安全目录
+    if [ -d "${INSTALL_DIR}/.git" ]; then
+        log_info "配置Git安全目录: ${INSTALL_DIR}"
+        git config --global --add safe.directory "${INSTALL_DIR}" || log_warn "无法配置Git安全目录，但这可能不影响后续操作"
+    fi
+    
     # 检查目标目录是否为空
     if [ -d "${INSTALL_DIR}" ] && [ "$(ls -A ${INSTALL_DIR})" ]; then
         if [ -d "${INSTALL_DIR}/.git" ]; then
             log_info "更新已存在的代码..."
             cd "${INSTALL_DIR}"
+            
+            # 重置所有本地修改
+            git reset --hard HEAD || log_warn "无法重置本地修改"
+            git clean -fd || log_warn "无法清理未跟踪的文件"
+            
+            # 设置正确的所有权
+            chown -R ${USER}:${GROUP} "${INSTALL_DIR}"
+            
+            # 拉取最新代码
             git pull origin main || handle_error "无法更新代码"
             return
         else
@@ -620,6 +635,9 @@ clone_project() {
     # 克隆代码
     git clone https://github.com/KurehaDu/alien4cloud-python.git "${INSTALL_DIR}" || handle_error "无法克隆代码"
     cd "${INSTALL_DIR}"
+    
+    # 设置正确的所有权
+    chown -R ${USER}:${GROUP} "${INSTALL_DIR}"
 }
 
 # 构建前端
