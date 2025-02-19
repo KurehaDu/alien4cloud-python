@@ -6,7 +6,6 @@ from datetime import datetime
 from pydantic import BaseModel
 
 from alien4cloud.core.tosca.parser.workflow import WorkflowDefinitionParser
-from alien4cloud.core.workflow.models import WorkflowTemplate
 from alien4cloud.core.workflow.state import StateManager
 from alien4cloud.core.workflow.executor import MockWorkflowExecutor
 
