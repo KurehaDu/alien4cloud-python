@@ -390,6 +390,82 @@ create_service_user() {
     fi
 }
 
+# 停止现有服务
+stop_existing_services() {
+    log_info "检查并停止现有服务..."
+    
+    # 检查supervisor是否正在运行
+    if systemctl is-active supervisord &>/dev/null; then
+        log_info "检查supervisor管理的服务..."
+        
+        # 停止alien4cloud相关服务
+        if supervisorctl status alien4cloud:* &>/dev/null; then
+            log_info "停止alien4cloud服务..."
+            supervisorctl stop alien4cloud:* || log_warn "停止alien4cloud服务失败"
+            sleep 2
+        fi
+    fi
+    
+    # 检查并停止nginx
+    if systemctl is-active nginx &>/dev/null; then
+        log_info "停止nginx服务..."
+        systemctl stop nginx
+        systemctl disable nginx
+    fi
+    
+    # 检查端口占用
+    local ports=($PORT $UI_PORT 80)
+    for port in "${ports[@]}"; do
+        if netstat -tuln | grep -q ":${port} "; then
+            log_warn "端口 ${port} 被占用，尝试停止相关进程..."
+            
+            # 获取占用进程信息
+            local pid=$(lsof -t -i:${port})
+            if [ -n "$pid" ]; then
+                local process_name=$(ps -p $pid -o comm=)
+                log_info "停止进程: ${process_name} (PID: ${pid})"
+                kill -15 $pid || kill -9 $pid || log_warn "无法停止进程 ${pid}"
+                sleep 2
+            fi
+        fi
+    done
+    
+    # 检查Python进程
+    local python_processes=$(ps aux | grep "[p]ython.*alien4cloud" | awk '{print $2}')
+    if [ -n "$python_processes" ]; then
+        log_info "停止遗留的Python进程..."
+        for pid in $python_processes; do
+            kill -15 $pid || kill -9 $pid || log_warn "无法停止Python进程 ${pid}"
+        done
+        sleep 2
+    fi
+    
+    # 检查进程是否完全停止
+    local all_stopped=true
+    
+    # 再次检查端口
+    for port in "${ports[@]}"; do
+        if netstat -tuln | grep -q ":${port} "; then
+            all_stopped=false
+            log_error "端口 ${port} 仍然被占用"
+        fi
+    done
+    
+    # 再次检查Python进程
+    if ps aux | grep -q "[p]ython.*alien4cloud"; then
+        all_stopped=false
+        log_error "仍有alien4cloud相关的Python进程在运行"
+    fi
+    
+    # 如果有服务未能停止，提供警告
+    if [ "$all_stopped" = false ]; then
+        log_warn "某些服务未能完全停止，这可能会影响安装过程"
+        log_warn "建议手动检查并停止这些服务，或者重启系统后再试"
+    else
+        log_info "所有相关服务已停止"
+    fi
+}
+
 # 创建目录结构
 create_directories() {
     log_info "创建目录结构..."
@@ -903,6 +979,7 @@ main() {
     fi
     
     create_service_user
+    stop_existing_services
     clone_project
     create_directories
     install_python
